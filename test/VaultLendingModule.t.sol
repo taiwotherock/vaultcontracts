@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import "forge-std/Test.sol";
-import "../src/VaultLending.sol";
+import "../src/VaultLendingV3.sol";
 import "../src/VaultLendingViews.sol";
 
 contract MockERC20 is IERC20 {
@@ -62,7 +62,7 @@ contract MockAccessControl is IAccessControlModule {
 }
 
 contract VaultLendingTest is Test {
-    VaultLending vaultLending;
+    VaultLendingV3 vaultLending;
     MockERC20 token;
     MockAccessControl accessControl;
     VaultLendingViews vaultLendingViews;
@@ -78,7 +78,7 @@ contract VaultLendingTest is Test {
         accessControl.setAdmin(admin, true);
         accessControl.setCreditOfficer(creditOfficer, true);
 
-        vaultLending = new VaultLending(address(accessControl));
+        vaultLending = new VaultLendingV3(address(accessControl));
         token = new MockERC20(1e24); // 1 million tokens
 
         // Fund lender and borrower
@@ -146,7 +146,7 @@ contract VaultLendingTest is Test {
         );
 
         //VaultLending.Loan storage loan = vaultLending.loans(ref);
-        VaultLending.Loan memory loan = vaultLending.getLoan(ref);
+        VaultLendingV3.Loan memory loan = vaultLending.getLoan(ref);
    
         assertEq(loan.principal, 1e20);
         assertEq(loan.borrower, borrower);
@@ -177,7 +177,7 @@ contract VaultLendingTest is Test {
         vaultLending.repayLoan(ref, 1e20);
 
         //VaultLending.Loan memory loan = vaultLending.loans(ref);
-        VaultLending.Loan memory loan = vaultLending.getLoan(ref);
+        VaultLendingV3.Loan memory loan = vaultLending.getLoan(ref);
         assertEq(loan.outstanding, 0);
         assertEq(loan.active, false);
     }

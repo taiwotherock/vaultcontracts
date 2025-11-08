@@ -2,10 +2,10 @@
 pragma solidity ^0.8.13;
 
 import {Script} from "forge-std/Script.sol";
-import {VaultLending} from "../src/VaultLending.sol";
+import {VaultLendingV3} from "../src/VaultLendingV3.sol";
 
 contract AccessControlModuleScript is Script {
-    VaultLending public vaultLendingModule;
+    VaultLendingV3 public vaultLendingModule;
 
    // You can set these addresses here or pass them via environment variables
     address public _accessControl = 0x9AEb09e5781A6C42D431e078A675582B0d4741fb;
@@ -20,7 +20,7 @@ contract AccessControlModuleScript is Script {
     function run() public {
         vm.startBroadcast();
 
-        vaultLendingModule = new VaultLending(_accessControl);
+        vaultLendingModule = new VaultLendingV3(_accessControl);
 
         vm.stopBroadcast();
     }
