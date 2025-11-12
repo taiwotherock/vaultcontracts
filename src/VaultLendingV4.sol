@@ -4,11 +4,13 @@ pragma solidity ^0.8.23;
 
 import "./VaultStorage.sol";
 
-contract VaultLendingV3 is VaultStorage {
+contract VaultLendingV3 is VaultStorage, ERC20 {
 
    
     uint256 private nextLoanId = 1;
+    IERC20 public immutable depositToken; 
     IAccessControlModule public immutable accessControl;
+    enum LoanStatus { Active, Defaulted, WrittenOff, Repaid }
    
     // Events
     event Deposit(address indexed user, address indexed token, uint256 amount);
