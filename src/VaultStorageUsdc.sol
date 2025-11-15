@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
+import "./IERC20Permit.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -15,13 +17,12 @@ interface IAccessControlModule {
 }
 
 // ------------------- Storage / Structs -------------------
-contract VaultStorage {
+contract VaultStorageUsdc {
 
     enum LoanStatus { Active, Defaulted, WrittenOff, Paid }
     struct Loan {
         bytes32 ref;
         address borrower;
-        address token;
         address merchant;
         uint256 principal;
         uint256 outstanding;
@@ -57,15 +58,12 @@ contract VaultStorage {
     bytes32[] public loanRefs;
     
 
-    mapping(address => mapping(address => uint256)) public vault;
-    mapping(address => mapping(address => uint256)) public lenderContribution;
-    mapping(address => uint256) public totalPoolContribution;
-    mapping(address => uint256) public pool;
-    mapping(address => mapping(address => uint256)) public merchantFund;
-    mapping(address => uint256) internal totalMerchantFund;
+    mapping(address => uint256) public vault; 
+    uint256 internal totalMerchantFund;         // total merchant ETH
+    mapping(address => uint256) public merchantFund;  // merchant => ETH amount
 
-    mapping(address => uint256) public cumulativeFeePerToken;
-    mapping(address => mapping(address => uint256)) public feeDebt;
+
+
     uint256 internal constant FEE_PRECISION = 1e6;
 
     mapping(address => bool) internal isBorrower;
@@ -82,12 +80,4 @@ contract VaultStorage {
     bool public paused;
     uint256 internal _locked;
 
-    /*
-    IAccessControlModule public immutable accessControl;
-
-    constructor(address _accessControl) {
-        require(_accessControl != address(0), "Invalid access control");
-        accessControl = IAccessControlModule(_accessControl);
-        _locked = 1;
-    }*/
 }

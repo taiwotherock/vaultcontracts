@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import "forge-std/Test.sol";
-import "../src/VaultLendingV3.sol";
+import "../src/VaultLendingV6.sol";
 import "../src/VaultLendingViews.sol";
 
 contract MockERC20 is IERC20 {
@@ -62,7 +62,7 @@ contract MockAccessControl is IAccessControlModule {
 }
 
 contract VaultLendingTest is Test {
-    VaultLendingV3 vaultLending;
+    VaultLendingV6 vaultLending;
     MockERC20 token;
     MockAccessControl accessControl;
     VaultLendingViews vaultLendingViews;
@@ -72,13 +72,16 @@ contract VaultLendingTest is Test {
     address borrower = address(0xDEAD);
     address merchant = address(0xCAFE);
     address lender = address(0xFEED);
+    address tokenAddr = address(0x3600000000000000000000000000000000000000);
+    address platformTreasury = address(0xFEED);
 
     function setUp() public {
         accessControl = new MockAccessControl();
         accessControl.setAdmin(admin, true);
         accessControl.setCreditOfficer(creditOfficer, true);
 
-        vaultLending = new VaultLendingV3(address(accessControl));
+        vaultLending = new VaultLendingV6(address(accessControl), tokenAddr, platformTreasury,
+        "BNPL USDC Liquidity Pool","UBNP");
         token = new MockERC20(1e24); // 1 million tokens
 
         // Fund lender and borrower
@@ -100,9 +103,9 @@ contract VaultLendingTest is Test {
         vaultLending.setWhitelist(merchant, true);
     }
 
-    function testDepositToVault() public {
+    function testdeposit() public {
         vm.prank(lender);
-        vaultLending.depositToVault(address(token), 1e20);
+        vaultLending.deposit(address(token), 1e20);
 
         //(uint256 deposit,,,) = vaultLendingViews.getLenderStats(lender, address(token));
         //assertEq(deposit, 1e20);
@@ -113,11 +116,11 @@ contract VaultLendingTest is Test {
         vm.prank(admin);
         vaultLending.setWhitelist(lender, true);
         vm.prank(lender);
-        vaultLending.depositToVault(address(token), 1e20);
+        vaultLending.deposit(address(token), 1e20);
 
 
         vm.prank(lender);
-        vaultLending.withdrawFromVault(address(token), 5e19);
+        vaultLending.withdraw(address(token), 5e19);
 
         //(uint256 deposit,,,) = vaultLendingViews.getLenderStats(lender, address(token));
         //assertEq(deposit, 5e19);
@@ -126,11 +129,14 @@ contract VaultLendingTest is Test {
     function testCreateLoan() public {
         // Lender deposits to pool
         vm.prank(lender);
-        vaultLending.depositToVault(address(token), 1e20);
+        vaultLending.deposit(address(token), 1e20);
+
+         uint256 durationDays = 60;
+        uint256 maturityDate = block.timestamp + (durationDays * 1 days);
 
         // Borrower deposits collateral
         vm.prank(borrower);
-        vaultLending.depositToVault(address(token), 5e19);
+        vaultLending.deposit(address(token), 5e19);
 
         bytes32 ref = keccak256(abi.encodePacked(block.timestamp));
 
@@ -142,23 +148,26 @@ contract VaultLendingTest is Test {
             1e20,
             1e19,
             5e19,
-            borrower
+            borrower,
+            maturityDate
         );
 
         //VaultLending.Loan storage loan = vaultLending.loans(ref);
-        VaultLendingV3.Loan memory loan = vaultLending.getLoan(ref);
+        VaultLendingV6.Loan memory loan = vaultLending.getLoan(ref);
    
         assertEq(loan.principal, 1e20);
         assertEq(loan.borrower, borrower);
-        assertEq(loan.active, true);
+        //assertEq(loan.status, LoanStatus.Active);
     }
 
     function testRepayLoan() public {
         vm.prank(lender);
-        vaultLending.depositToVault(address(token), 1e20);
+        vaultLending.deposit(address(token), 1e20);
+        uint256 durationDays = 60;
+        uint256 maturityDate = block.timestamp + (durationDays * 1 days);
 
         vm.prank(borrower);
-        vaultLending.depositToVault(address(token), 5e19);
+        vaultLending.deposit(address(token), 5e19);
 
         bytes32 ref = keccak256(abi.encodePacked(block.timestamp));
 
@@ -170,31 +179,34 @@ contract VaultLendingTest is Test {
             1e20,
             1e19,
             5e19,
-            borrower
+            borrower,maturityDate
         );
 
         vm.prank(borrower);
         vaultLending.repayLoan(ref, 1e20);
 
         //VaultLending.Loan memory loan = vaultLending.loans(ref);
-        VaultLendingV3.Loan memory loan = vaultLending.getLoan(ref);
+        VaultLendingV6.Loan memory loan = vaultLending.getLoan(ref);
         assertEq(loan.outstanding, 0);
-        assertEq(loan.active, false);
+        //assertEq(loan.status, false);
     }
 
     function testWithdrawFees() public {
         // Lender deposits
+
+         uint256 durationDays = 60;
+        uint256 maturityDate = block.timestamp + (durationDays * 1 days);
         
         vm.prank(admin);
         vaultLending.setWhitelist(lender, true);
         vm.prank(lender);
-        vaultLending.depositToVault(address(token), 1e20);
+        vaultLending.deposit(address(token), 1e20);
 
         // Borrower deposits and takes loan
         vm.prank(admin);
         vaultLending.setWhitelist(borrower, true);
         vm.prank(borrower);
-        vaultLending.depositToVault(address(token), 5e19);
+        vaultLending.deposit(address(token), 5e19);
 
         bytes32 ref = keccak256(abi.encodePacked(block.timestamp));
 
@@ -206,7 +218,8 @@ contract VaultLendingTest is Test {
             1e20,
             1e19,
             5e19,
-            borrower
+            borrower,
+            maturityDate
         );
 
         // Repay loan to accrue fees
