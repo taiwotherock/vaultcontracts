@@ -215,13 +215,13 @@ contract VaultLendingUsdcV1 is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
 
     /* ========== VAULT FUNCTIONS ========== */
 
-    function deposit() external payable  returns (uint256 sharesMinted) {
+    function deposit() external returns (uint256 sharesMinted) {
         uint256 amount = msg.value;
         require(amount > 0, "zero deposit");
         uint256 supply = totalSupply;
         uint256 nav2 = _nav();
 
-        //require(depositToken.transferFrom(msg.sender, address(this), amount), "transfer failed");
+        require(depositToken.transferFrom(msg.sender, address(this), amount), "transfer failed");
 
         uint256 shares;
         if (supply == 0 || nav2 == 0) {
@@ -255,7 +255,7 @@ contract VaultLendingUsdcV1 is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         _burn(msg.sender, sharesToBurn);
         poolCash -= amount;
         vault[msg.sender] -= amount;
-        //require(depositToken.transfer(msg.sender, amount), "transfer failed");
+        require(depositToken.transfer(msg.sender, amount), "transfer failed");
         (bool sent, ) = msg.sender.call{value: amount}("");
          require(sent, "USDC transfer failed");
 

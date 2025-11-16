@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../src/VaultLendingUsdc.sol";
+import "../src/VaultLendingUsdcV2.sol";
 
 contract MockAccessControlModule {
     address public admin;
@@ -23,14 +23,14 @@ contract MockAccessControlModule {
 }
 
 contract VaultLendingUsdcTest is Test {
-    VaultLendingUsdc vault;
+    VaultLendingUsdcV2 vault;
     MockAccessControlModule ac;
 
     address admin = address(0xA1);
     address creditOfficer = address(0xC1);
     address lender = address(0xC1);
     address borrower = address(0xB1);
-    address merchant = address(0xM1);
+    address merchant = address(0xB1);
     address platformTreasury = address(0xT1);
     address stableCoin = address(0xT1);
     address attestationOracle = address(0xT1);

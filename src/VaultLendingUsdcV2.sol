@@ -10,7 +10,7 @@ import "./IBNPLAttestationOracle.sol";
 //import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 //import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
+contract VaultLendingUsdcV2 is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
 
    
     //uint256 private nextLoanId = 1;
@@ -39,8 +39,8 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
     IAccessControlModule public immutable accessControl;
     IERC20Permit public immutable stable;
     IBNPLAttestationOracle public attestationOracle;
-    
-   
+    IERC20 public immutable depositToken;
+       
     // Events
    
     event LoanCreated(bytes32 loanId, address borrower, uint256 principal, uint256 fee,
@@ -76,6 +76,8 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         require(_accessControl != address(0), "Invalid access control");
         require(_stable != address(0), "invalid token");
         require(_attestationOracle != address(0), "invalid oracle");
+        
+        depositToken = IERC20(_stable);
         stable = IERC20Permit(_stable);
         accessControl = IAccessControlModule(_accessControl);
         platformTreasury = _platformTreasury;
@@ -215,13 +217,12 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
 
     /* ========== VAULT FUNCTIONS ========== */
 
-    function deposit() external payable  returns (uint256 sharesMinted) {
-        uint256 amount = msg.value;
+    function deposit(uint256 amount) external returns (uint256 sharesMinted) {
+        
         require(amount > 0, "zero deposit");
         uint256 supply = totalSupply;
         uint256 nav2 = _nav();
-
-        //require(depositToken.transferFrom(msg.sender, address(this), amount), "transfer failed");
+        require(depositToken.transferFrom(msg.sender, address(this), amount), "transfer failed");
 
         uint256 shares;
         if (supply == 0 || nav2 == 0) {
@@ -248,16 +249,19 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         require(sharesToBurn <= balanceOf[msg.sender], "insufficient shares");
         
         uint256 supply = totalSupply;
-        uint256 amount = (poolCash * sharesToBurn) / supply;
+        //uint256 amount = (poolCash * sharesToBurn) / supply;
+        uint256 nav2 = _nav(); // same NAV function used in deposit
+
+        uint256 amount = (sharesToBurn * nav2) / supply;
         require(amount > 0, "nothing to withdraw");
-        //require(vault[msg.sender] >= amount, "insufficient vault balance");
+        require(vault[msg.sender] >= amount, "insufficient vault balance");
 
         _burn(msg.sender, sharesToBurn);
         poolCash -= amount;
         vault[msg.sender] -= amount;
         //require(depositToken.transfer(msg.sender, amount), "transfer failed");
-        (bool sent, ) = msg.sender.call{value: amount}("");
-         require(sent, "USDC transfer failed");
+        // transfer USDC token to user
+        require(depositToken.transfer(msg.sender, amount),"token transfer failed");
 
         emit Withdrawn(msg.sender, amount, sharesToBurn);
     }
@@ -360,22 +364,21 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         poolCash = poolCash >= available ? poolCash - available : 0;
         totalDisbursedToMerchant += available;
 
-
         // Execute safe USDC transfer
-                
-        (bool sent, ) = payable(merchant).call{value: available}("");
-         require(sent, "USDC transfer failed");
+           
+        require(depositToken.transfer(merchant, available),"token transfer failed");
         emit MerchantWithdrawn(merchant, available);
     }
 
-    function repayLoan(bytes32 ref) external payable nonReentrant  {
+    function repayLoan(bytes32 ref,uint256 amount) external nonReentrant  {
         Loan storage loan = loans[ref];
-        uint256 amount = msg.value;
         require(loan.status == LoanStatus.Active, "Loan is closed");
         require(loan.borrower == msg.sender, "Not borrower");
         
         require(amount > 0, "Amount must be > 0");
         require(loan.outstanding > 0, "Outstanding must be > 0");
+
+        require(depositToken.transferFrom(msg.sender, address(this), amount), "transfer failed");
 
          // ---- 2. Fee split ----
         uint256 platformFee = (amount * _platformFeeRate) / 1e6;
@@ -487,8 +490,8 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         require(amount <=_platformFee , "exceeds accrued");
         _platformFee -= amount;
 
-        (bool sent, ) = payable(platformTreasury).call{value: amount}("");
-        require(sent, "USDC transfer failed");
+        require(depositToken.transfer(msg.sender, amount),"token transfer failed");
+        
        emit PlatformFeeWithdrawn(platformTreasury, amount);
     }
 
@@ -749,8 +752,7 @@ contract VaultLendingUsdc is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
         }
     }
 
-    function fetchRateSettings() external view returns ( uint256 lenderFeeRate, uint256 platformFeeRate,
-    uint256 depositContributionRate, uint256 defaultBaseRate) {
+    function fetchRateSettings() external view returns ( uint256 lenderFeeRate, uint256 platformFeeRate,uint256 depositContributionRate, uint256 defaultBaseRate) {
         
         lenderFeeRate = _lenderFeeRate;
         platformFeeRate = _platformFeeRate;
