@@ -702,7 +702,11 @@ contract VaultLendingUsdcV2 is VaultStorageUsdc, SimpleERC20, SimpleOwnable {
     }
 
     function isCreditOfficer(address user) external view returns (bool) {
-        return whitelist[user];
+        return accessControl.isCreditOfficer(user);
+    }
+
+    function isAdmin(address user) external view returns (bool) {
+        return accessControl.isAdmin(user);
     }
 
     // -----------------------
