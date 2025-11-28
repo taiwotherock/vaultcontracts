@@ -31,13 +31,13 @@ contract VaultLendingUsdcTest is Test {
     address lender = address(0xC1);
     address borrower = address(0xB1);
     address merchant = address(0xB1);
-    address platformTreasury = address(0xT1);
-    address stableCoin = address(0xT1);
-    address attestationOracle = address(0xT1);
+    address platformTreasury = address(0xB1);
+    address stableCoin = address(0xB1);
+    address attestationOracle = address(0xB1);
 
     function setUp() public {
         ac = new MockAccessControlModule(admin, creditOfficer);
-        vault = new VaultLendingUsdc(address(ac), platformTreasury, stableCoin, attestationOracle, "VaultUSD", "vUSDC");
+        vault = new VaultLendingUsdcV2(address(ac), platformTreasury, stableCoin, attestationOracle, "VaultUSD", "vUSDC");
 
         // whitelist parties
         vm.prank(admin);
@@ -112,7 +112,7 @@ contract VaultLendingUsdcTest is Test {
             30 days
         );
 
-        VaultLendingUsdc.Loan memory L = vault.getLoan(bytes32("LN1"));
+        VaultLendingUsdcV2.Loan memory L = vault.getLoan(bytes32("LN1"));
         assertEq(L.principal, 30 ether);
         assertEq(L.outstanding, 10 ether);
         assertEq(L.borrower, borrower);
@@ -144,9 +144,9 @@ contract VaultLendingUsdcTest is Test {
         vm.prank(borrower);
         vault.repayLoan{value: 10 ether}(bytes32("LN2"));
 
-        VaultLendingUsdc.Loan memory L = vault.getLoan(bytes32("LN2"));
+        VaultLendingUsdcV2.Loan memory L = vault.getLoan(bytes32("LN2"));
         assertEq(L.outstanding, 0);
-        assertEq(L.status, uint8(VaultLendingUsdc.LoanStatus.Paid));
+        assertEq(L.status, uint8(VaultLendingUsdcV2.LoanStatus.Paid));
     }
 
     // ----------------------------------------------------------

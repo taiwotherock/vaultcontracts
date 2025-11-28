@@ -14,6 +14,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
     //mapping(address => CollateralPosition) internal _positions;
     mapping(address => uint256) public balances;
     mapping(bytes32 => Overdraft) public overdrafts;
+    mapping(bytes32 => CreditLimitAdjustment) public creditLimitAdjustments;
     mapping(address => bool) private hasActiveOverdraft;
     mapping(address => bytes32[]) private borrowerOverdraftRefs;
     mapping(bytes32 => DebitTransaction) public debitTransactions;
@@ -22,6 +23,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
     mapping(address => bool) public borrowerWhitelisted;
 
     // configuration
+    uint256 public activeOverdraftCount;
     uint256 public maximumOverdraftLimit = 1_000_000 * 100;
     uint256 public timelockAfterApproval = 1 days;
     uint256 public globalFeeBps = 50;
@@ -36,6 +38,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
     address public contractOwner;
 
     mapping(address => mapping(uint256 => uint256)) public dailyUsedByBorrower;
+    mapping(bytes32 => mapping(uint256 => bool)) public dailyOverdraftFee;
 
     // Rescue protection
     uint256 public rescueAllowedAfter; // timestamp when owner may call rescueERC20 (must be paused)
@@ -150,9 +153,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         require(balances[msg.sender] >= amount, "insufficient collateral");
         require(tokenToFiatRate > 0, "zero rate");
         require(tokenDecimal > 0 , "token decimal not set");
-        uint256 limitUsed;
-        uint256 totalTokenAmount; 
-
+      
         //(limitUsed, totalTokenAmount) = _totalUtilizedLimit(msg.sender);
          bytes32[] memory refs = borrowerOverdraftRefs[msg.sender];
          Overdraft storage od = overdrafts[refs[0]];
@@ -189,6 +190,12 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         require(borrower != address(0), "Invalid borrower address");
         require(lender != address(0), "Invalid lender address");
         require(balances[borrower] >= tokenAmount,"insufficient collateral borrower deposit");
+        require(feeBps > 0, "Daily rate fee not set");
+        require(_tokenToFiatRate > 0, "rate is zero");
+        require(tokenAmount > 0, "Token amount is zero");
+        require(creditLimit > 0, "Credit Limit is zero");
+        require(expiry > 0, "Expiry date is zero");
+
         overdrafts[ref] = Overdraft({
             ref: ref,
             creditLimit: creditLimit,
@@ -204,6 +211,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         });
         hasActiveOverdraft[borrower] = true;
         borrowerOverdraftRefs[borrower].push(ref);
+        activeOverdraftCount += 1;
         emit OverdraftPosted(ref, borrower, creditLimit);
     }
 
@@ -217,6 +225,10 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         require(dailyUsedByBorrower[msg.sender][day] + fiatAmount <= maximumDailyLimit, "exceeds daily limit");
         require(od.availableLimit >= fiatAmount, "insufficient available limit");
         require(!debitTransactions[paymentRef].exists , "payment exists");
+
+        uint256 tokenValueUsed = _utilizedAmountInToken(od.utilizedLimit);
+        uint256 availableBalance = balances[msg.sender] - tokenValueUsed;
+        require(availableBalance >= amount, "insufficient balance");
 
         // Effects
         debitTransactions[paymentRef] = DebitTransaction({
@@ -268,6 +280,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
    
         od.availableLimit += tp.fiatAmount;
         od.utilizedLimit -= tp.fiatAmount;
+        tp.approved = true;
 
         //du.approveReleaseTimestamp = block.timestamp + timelockAfterApproval;
 
@@ -288,14 +301,47 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         Overdraft storage od = overdrafts[creditRef];
         require(od.exists, "no overdraft");
         address borrower = od.borrower;
-        uint256 feeAmt = od.fee;
+               
+        require(od.utilizedLimit > 0, "no utilized fund");
+        
+        uint256 day = _dayOf(block.timestamp);
+        //daily fee amount
+        uint256 feeAmt =  (od.utilizedLimit * od.fee) / 10000;
+        require(!dailyOverdraftFee[od.ref][day], "daily fee already posted");
+        
         require(balances[borrower] >= feeAmt, "insufficient collateral balance");
         require(od.availableLimit >= feeAmt,  "insufficient available limit" );
 
         balances[borrower] -= feeAmt;
         od.availableLimit -= feeAmt;
+        od.utilizedLimit += feeAmt;
         totalFeeCollected += feeAmt;
+        dailyOverdraftFee[od.ref][day] = true;
         emit DailyFeePosted(creditRef, feeAmt);
+    }
+
+    function processBulkDailyFee(address borrower) external  {
+        bytes32[] memory refs = borrowerOverdraftRefs[borrower];
+        uint256 day = _dayOf(block.timestamp);
+        uint256 todayFee =0;
+    
+        for (uint256 i = 0; i < refs.length; i++) {
+            Overdraft storage od = overdrafts[refs[i]];
+            if (od.exists && !dailyOverdraftFee[od.ref][day]) {
+                
+                if(od.utilizedLimit > 0 && od.fee > 0) {
+                    uint256 feeAmt =  (od.utilizedLimit * od.fee) / 10000;
+                    balances[borrower] -= feeAmt;
+                    od.availableLimit -= feeAmt;
+                    od.utilizedLimit += feeAmt;
+                    totalFeeCollected += feeAmt;
+                    todayFee += feeAmt;
+                    dailyOverdraftFee[od.ref][day] = true;
+                }
+            }
+        }
+
+        emit DailyBulkFeePosted(totalFeeCollected, todayFee);
     }
 
     function withdrawFee(uint256 amount) external whenNotPaused nonReentrant {
@@ -304,6 +350,50 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         totalFeeCollected -= amount;
         require(IERC20(token).transfer(platformFeeAddress, amount),"token transfer failed");
         emit PlatformFeeWithdrawn(platformFeeAddress, amount);
+    }
+
+    function modifyOverdraftLine(
+        bytes32 ref,
+        bytes32 tranRef,
+        bool topup,
+        uint256 fiatAmount,
+        uint256 feeBps,
+        uint256 expiry,
+        uint256 tokenAmount,
+        uint256 _tokenToFiatRate
+    ) external whenNotPaused onlyCreditOfficer {
+
+        Overdraft storage od = overdrafts[ref];
+        require(od.exists, "no overdraft");
+        require(!creditLimitAdjustments[tranRef].exists, "tranref exists");
+
+           creditLimitAdjustments[tranRef] = CreditLimitAdjustment({
+                creditRef: ref,
+                tranRef: tranRef,
+                topup: topup,
+                amount: tokenAmount,
+                fiatAmount: fiatAmount,
+                rate: _tokenToFiatRate,
+                exists: true,
+                approved: false
+            }); 
+
+            if(topup) {
+                od.creditLimit += fiatAmount;
+                od.availableLimit += fiatAmount;
+            }
+            else 
+            {
+                od.creditLimit -= fiatAmount;
+                od.availableLimit -= fiatAmount;
+            }
+            od.fee = feeBps;
+            od.expiry = expiry;
+            od.tokenToFiatRate = _tokenToFiatRate;
+
+        emit CreditLimitAdjusted( ref, tranRef, topup,  fiatAmount,  feeBps,  _tokenToFiatRate);
+           
+
     }
 
  
@@ -327,7 +417,7 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         return _computeHealthFactor(tokenAmount,utilizedAmount);
     }
 
-    function borrowerHealthFactor(bytes32 creditRef)  external view returns (uint256) {
+    function overdraftLineHealthFactor(bytes32 creditRef)  external view returns (uint256) {
         Overdraft storage od = overdrafts[creditRef];
         require(od.exists, "no overdraft");
         return _computeHealthFactor(od.tokenAmount,od.utilizedLimit);
@@ -380,11 +470,13 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
             address lender,
             uint256 tokenAmount,
             uint256 _tokenToFiatRate,
-            bool exists
+            uint256 healthFactor,
+            uint256 tokenBalance
         ) 
     {
         Overdraft storage od = overdrafts[ref];
         require(od.exists, "OVERDRAFT_NOT_FOUND");
+        uint256 hf = _computeHealthFactor(od.tokenAmount,od.utilizedLimit);
 
         return (
             od.ref,
@@ -397,7 +489,8 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
             od.lender,
             od.tokenAmount,
             od.tokenToFiatRate,
-            od.exists
+            hf, 
+            balances[od.borrower]
         );
     }
 
@@ -461,7 +554,39 @@ contract OverdraftLineVault is Ownable, Pausable, ReentrancyGuard {
         );
     }
 
+    function fetchVaultSettings() 
+        external 
+        view 
+        returns (
+            uint256 noOfOverdrafts,
+            uint256 _maximumOverdraftLimit,
+            uint256 _globalFeeBps,
+            uint256 _maximumDebitAmount,
+            uint256 _maximumDailyLimit,
+            uint256 _tokenToFiatRate,
+            uint256 _totalFeeCollected,
+            uint256 _tokenDecimal
+            
+        ) 
+    {
+       
+        return (
+           
+             activeOverdraftCount,
+             maximumOverdraftLimit,
+             globalFeeBps,
+            maximumDebitAmount,
+            maximumDailyLimit,
+            tokenToFiatRate,
+            totalFeeCollected,
+            tokenDecimal
+        );
+    }
 
+
+
+
+    
 
 
 

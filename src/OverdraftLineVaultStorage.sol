@@ -33,7 +33,9 @@ interface IERC20 {
     event PausedContract();
     event UnpausedContract();
     event DailyFeePosted(bytes32 indexed creditRef,uint256 amount);
+    event DailyBulkFeePosted(uint256 totalFee,uint256 amount);
     event PlatformFeeWithdrawn(address receiver, uint256 amount);
+    event CreditLimitAdjusted(bytes32 indexed ref, bytes32 indexed tranRef, bool topup, uint256  fiatAmount, uint256  feeBps, uint256  fiatRate);
     event RescueEnabled(uint256 allowedAfter);
     event RescueExecuted(address token, address to, uint256 amount);
 
@@ -70,6 +72,17 @@ interface IERC20 {
         uint256 fiatAmount;
         uint256 rate;
         bytes32 creditRef;
+        bool exists;
+        bool approved; 
+    }
+
+    struct CreditLimitAdjustment {
+        bytes32 creditRef;
+        bytes32 tranRef;
+        bool topup;
+        uint256 amount;
+        uint256 fiatAmount;
+        uint256 rate;
         bool exists;
         bool approved; 
     }

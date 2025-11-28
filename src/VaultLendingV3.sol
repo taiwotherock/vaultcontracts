@@ -84,7 +84,7 @@ contract VaultLendingV3 is VaultStorage {
     }
 
     modifier onlyActiveLoan(bytes32 ref) {
-        require(loans[ref].active, "Loan not active");
+       // require(loans[ref].st, "Loan not active");
         _;
     }
 
@@ -229,7 +229,7 @@ contract VaultLendingV3 is VaultStorage {
         l.installmentsPaid = 0;
         l.fee = fee;
         l.totalPaid = depositAmount;
-        l.active = true;
+        //l.active = true;
         l.disbursed = false;
 
 
@@ -276,7 +276,7 @@ contract VaultLendingV3 is VaultStorage {
 
     function repayLoan(bytes32 ref, uint256 amount) external nonReentrant  {
         Loan storage loan = loans[ref];
-        require(loan.active, "Loan is closed");
+        //require(loan.status = LoanStatus.Active, "Loan is closed");
         require(loan.borrower == msg.sender, "Not borrower");
         require(amount > 0, "Amount must be > 0");
         require(loan.outstanding > 0, "Outstanding must be > 0");
@@ -294,7 +294,7 @@ contract VaultLendingV3 is VaultStorage {
         loan.totalPaid += amount;
 
         if (loan.outstanding == 0) {
-            loan.active = false;
+            loan.status = LoanStatus.Active;
             _removeLoanFromBorrower(msg.sender, ref);
             emit LoanClosed(ref, msg.sender);
         }
@@ -358,7 +358,7 @@ contract VaultLendingV3 is VaultStorage {
 
         for (uint256 i = 0; i < len; i++) {
             Loan storage l = loans[ids[i]];
-            if (l.active) {
+            if (l.status == LoanStatus.Active) {
                 totalOutstanding += l.outstanding;
             }
         }
