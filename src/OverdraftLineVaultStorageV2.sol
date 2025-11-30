@@ -74,6 +74,7 @@ interface IERC20 {
         bytes32 creditRef;
         bool exists;
         bool approved; 
+        address postedBy;
     }
 
     struct CreditLimitAdjustment {
