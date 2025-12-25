@@ -470,20 +470,14 @@ contract VaultLendingV7 {
 
     function _markDefaultInternal(Loan storage l) internal {
         require(l.status == LoanStatus.Active, "NOT_ACTIVE");
-      
 
         l.status = LoanStatus.Defaulted;
 
         totalPastDueAmount += l.outstanding;
         totalPastDueCount += 1;
 
-        require(
-            borrowerActiveLoan[l.borrower] == l.ref,
-            "ACTIVE_LOAN_MISMATCH"
-        );
-
+        // Do NOT clear borrowerActiveLoan yet; leave it for write-off
         borrowerLoanState[l.borrower] = BorrowerLoanState.Defaulted;
-        borrowerActiveLoan[l.borrower] = bytes32(0);
     }
 
     function processPastDue(uint256 start, uint256 limit) external onlyCreditOfficer nonReentrant {
@@ -522,11 +516,11 @@ contract VaultLendingV7 {
             poolCash -= rem;
         }
 
-        l.status = LoanStatus.WrittenOff;
+        // Clear borrowerActiveLoan now
         borrowerLoanState[l.borrower] = BorrowerLoanState.WrittenOff;
         borrowerActiveLoan[l.borrower] = bytes32(0);
-        
-        
+
+        l.status = LoanStatus.WrittenOff;
 
         emit LoanWrittenOff(id, loss);
     }
