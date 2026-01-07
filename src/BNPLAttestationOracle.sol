@@ -28,6 +28,7 @@ contract BNPLAttestationOracle {
 
     constructor() {
         owner = msg.sender;
+        trustedAttestors[owner] = true;
     }
 
     modifier onlyOwner() {

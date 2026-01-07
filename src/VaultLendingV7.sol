@@ -128,7 +128,7 @@ contract VaultLendingV7 {
     uint256 private _depositContributionPercent = 3000; // 30%
     uint256 public maxPastDueBP = 3_000; // 30%
     uint256 public loanCounter;
-    uint256 public maxLoanLimit;
+    uint256 public maxLoanLimit =10 * 1e6; // 10 USDC
 
     uint256 public constant BP = 10_000;
     uint256 public immutable tokenDecimal;
