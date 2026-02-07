@@ -28,21 +28,8 @@ interface IERC20 {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
-interface IBNPLAttestationOracle {
-    function getAttestation(address borrower) external view returns (
-        uint256 creditLimit,
-        uint256 creditScore,
-        bool kycVerified,
-        uint256 utilizedLimit,
-        address attestor,
-        uint256 updatedAt
-    );
 
-    function increaseUsedCredit(address borrower, uint256 amount) external;
-    function decreaseUsedCredit(address borrower, uint256 amount) external;
-}
-
-contract VaultLendingV7 {
+contract VaultLendingV8 {
 
     using SafeERC20 for IERC20; 
     struct Loan {
@@ -74,8 +61,7 @@ contract VaultLendingV7 {
 
     IERC20 public immutable asset;
     address public immutable token;
-    IBNPLAttestationOracle public oracle;
-
+    
     /*//////////////////////////////////////////////////////////////
     ERC4626 CORE
     //////////////////////////////////////////////////////////////*/
@@ -114,7 +100,7 @@ contract VaultLendingV7 {
     uint256 public constant WITHDRAW_COOLDOWN = 1 days;
     uint256 public maxWithdrawBP = 2_000; // 20% of pool per withdrawal
     uint256 public gracePeriod; // seconds (e.g. 7 days = 604800)
-    bool public oracleEnabled = true;
+  
 
     /*//////////////////////////////////////////////////////////////
     FEES
@@ -184,15 +170,13 @@ contract VaultLendingV7 {
     event MerchantWithdrawn(address indexed merchant, uint256 amount);
     event PlatformFeesWithdrawn(address treasury, uint256 amount);
     event GracePeriodUpdated(uint256 oldGracePeriod, uint256 newGracePeriod);
-    event OracleDisabled(address indexed admin);
-    event OracleEnabled(address indexed admin);
+
 
     /*//////////////////////////////////////////////////////////////
     CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
     constructor(
         address _asset,
-        address _oracle,
         address _platformTreasury,
         address _vaultManager,
         address _creditOfficer,
@@ -202,7 +186,6 @@ contract VaultLendingV7 {
     ) {
         asset = IERC20(_asset);
         token = _asset;
-        oracle = IBNPLAttestationOracle(_oracle);
         platformTreasury = _platformTreasury;
         vaultManager = _vaultManager;
         creditOfficer = _creditOfficer;
@@ -235,17 +218,7 @@ contract VaultLendingV7 {
         return totalShares == 0 ? shares : (shares * totalAssets()) / totalShares;
     }
 
-    function disableOracle() external onlyAdmin {
-        require(oracleEnabled, "ORACLE_ALREADY_DISABLED");
-        oracleEnabled = false;
-        emit OracleDisabled(msg.sender);
-    }
-
-    function enableOracle() external onlyAdmin {
-        require(!oracleEnabled, "ORACLE_ALREADY_ENABLED");
-        oracleEnabled = true;
-        emit OracleEnabled(msg.sender);
-    }
+   
 
     function setMaxPastDueBP(uint256 bp) external onlyAdmin {
         require(bp <= BP, "INVALID_BP");
@@ -345,19 +318,6 @@ contract VaultLendingV7 {
         require(whitelist[merchant], "Merchant Not whitelisted");
         require(borrowerList[borrower] >= depositAmount,"no deposit contribution received");
         require(borrowerLoanState[borrower] == BorrowerLoanState.None, "BORROWER_HAS_LOAN");
-
-
-        require(oracleEnabled, "ORACLE_DISABLED");
-  
-        (uint256 creditLimit, uint256 score, bool kycVerified,
-            uint256 utilizedLimit,
-            address attestor,
-            uint256 updatedAt) 
-        = oracle.getAttestation(borrower);
-        require(kycVerified, "Kyc not verified");
-        require(score >= minCreditScore, "credit score too low");
-        require(utilizedLimit + principal <= creditLimit, "credit limit exceeded");
-        require(block.timestamp - updatedAt <= 1 days, "ORACLE_STALE");
         
         require(principal <= maxLoanLimit, "max loan limit exceeded");
 
@@ -406,9 +366,6 @@ contract VaultLendingV7 {
         borrowerLoanState[borrower] = BorrowerLoanState.Active;
         borrowerActiveLoan[borrower] = ref;
 
-        if(oracleEnabled)
-            oracle.increaseUsedCredit(borrower, principal);
-
         emit LoanCreated(ref, borrower, principal);
     }
 
@@ -437,9 +394,6 @@ contract VaultLendingV7 {
         l.lastPaymentTs = block.timestamp;
         totalPrincipalOutstanding -= principalPaid;
         poolCash += principalPaid;
-
-        if(oracleEnabled)
-            oracle.decreaseUsedCredit(l.borrower, principalPaid);
 
         if (l.outstanding == 0) {
             l.status = LoanStatus.Closed;

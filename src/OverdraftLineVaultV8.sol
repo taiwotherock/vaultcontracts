@@ -6,7 +6,9 @@ import "./Pausable.sol";
 import "./OverdraftLineVaultStorageV3.sol";
 import "./ReentrancyGuard.sol";
 
-contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
+
+
+contract OverdraftLineVaultV8 is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     //IERC20 public immutable token;
     address token;
@@ -29,17 +31,17 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
 
     // configuration
     uint256 public activeOverdraftCount;
-    uint256 public maximumOverdraftLimit = 100_000_000 ;
+    uint256 public maximumOverdraftLimit = 100 * 1e18; // fiat amount (e.g. cents);
     uint256 public timelockAfterApproval = 1 days;
     uint256 public globalFeeBps = 50;
-    uint256 public maximumDebitAmount = 10_000_000;
-    uint256 public maximumDailyLimit = 100_000_000;
+    uint256 public maximumDebitAmount = 10* 1e18; // fiat amount (e.g. cents)   ;
+    uint256 public maximumDailyLimit = 100 * 1e18;
     uint256 public constant BASIS_POINT_PERCENT = 10000;
     uint256 public constant MAX_DAILY_FEE_BATCH = 100;
     uint256 public maxRateChangeBps = 1000; // 10%
     uint256 public nativeDecimal= 1e18;
     uint256 public tokenDecimal=1e6;
-    uint256 public tokenToFiatRate;
+    uint256 public tokenToFiatRate = 1478 * 1e18; // fiat per token (e.g. 1478 NGN per USDT)
     uint256 public totalFeeCollected;
     address public platformFeeAddress;
     address public contractOwner;
@@ -275,8 +277,14 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
         emit StaffChangeApproved(change.staffAddress, change.enable, msg.sender, changeId);
     }
 
+    function getStaffDetail(address staffAddr) external view returns (bool status, address addedBy, uint256 timestamp, uint32 role) {
+        Staff storage s = staffs[staffAddr];
+        return (s.status, s.addedBy, s.timestamp, s.role);
+    }
+
+
     // --- Collateral deposit/withdraw ---
-    function depositCollateral( uint256 amount) external whenNotPaused nonReentrant {
+    function depositCollateral(uint256 amount) external whenNotPaused nonReentrant {
         require(amount > 0, "amount > 0");
         // Effects
        
@@ -468,35 +476,7 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
         require(borrower == od.borrower, "not borrower");
         require(!amountsPaid[paymentRef].exists , "payment exists");
         require(od.approved, "overdraft line not approved");
-
-        uint256 remaining = fiatAmount;
-
-        // Pay interest first
-        if (od.interestAccrued > 0) {
-            if (remaining >= od.interestAccrued) {
-                remaining -= od.interestAccrued;
-                od.interestAccrued = 0;
-            } else {
-                od.interestAccrued -= remaining;
-                remaining = 0;
-            }
-        }
-
-        // Pay principal
-        if (remaining > 0) {
-            require(od.utilizedLimit >= remaining, "OVERPAY");
-            od.utilizedLimit -= remaining;
-            od.availableLimit += remaining;
-        }
-
-        // 3️⃣ Clear active flag ONLY when fully settled
-        if (od.utilizedLimit == 0 && od.interestAccrued == 0) {
-            activeOverdraftByBorrower[borrower] = bytes32(0);
-            if (activeOverdraftCount > 0) {
-                activeOverdraftCount -= 1;
-            }
-        }
-    
+        
         amountsPaid[paymentRef] = RepaymentTransaction({tranRef: paymentRef, borrower: borrower,
         amount: amount, fiatAmount: fiatAmount, rate: rate, creditRef: creditRef, exists:true,
         approved:false,postedBy: msg.sender });
@@ -518,6 +498,35 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
    
         //od.availableLimit += tp.fiatAmount;
         //od.utilizedLimit -= tp.fiatAmount;
+
+         uint256 remaining = tp.fiatAmount;
+
+        // Pay interest first
+        if (od.interestAccrued > 0) {
+            if (remaining >= od.interestAccrued) {
+                remaining -= od.interestAccrued;
+                od.interestAccrued = 0;
+            } else {
+                od.interestAccrued -= remaining;
+                remaining = 0;
+            }
+        }
+
+        // Pay principal
+        if (remaining > 0) {
+            require(od.utilizedLimit >= remaining, "OVERPAY");
+            od.utilizedLimit -= remaining;
+            od.availableLimit += remaining;
+        }
+
+        // 3️⃣ Clear active flag ONLY when fully settled
+        if (od.utilizedLimit == 0 && od.interestAccrued == 0) {
+            activeOverdraftByBorrower[od.borrower] = bytes32(0);
+            if (activeOverdraftCount > 0) {
+                activeOverdraftCount -= 1;
+            }
+        }
+
         tp.approved = true;
 
         //du.approveReleaseTimestamp = block.timestamp + timelockAfterApproval;
@@ -525,14 +534,107 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
         emit PaymentApproved(paymentRef, creditRef);
     }
 
+   function repayOverdraftWithToken(
+        bytes32 creditRef,
+        uint256 tokenAmount
+    ) external whenNotPaused nonReentrant onlyWhitelistedUser {
+        require(tokenAmount > 0, "AMOUNT_ZERO");
+
+        Overdraft storage od = overdrafts[creditRef];
+        require(od.exists, "OVERDRAFT_NOT_FOUND");
+        require(od.approved, "OVERDRAFT_NOT_APPROVED");
+        require(msg.sender == od.borrower, "NOT_BORROWER");
+        require(tokenToFiatRate > 0, "RATE_ZERO");
+        require(tokenDecimal > 0, "TOKEN_DECIMAL_ZERO");
+
+        // Pull tokens in first (effects-before-interactions protected by nonReentrant)
+        IERC20(token).safeTransferFrom(
+            msg.sender,
+            address(this),
+            tokenAmount
+        );
+
+        // Convert token → fiat
+        uint256 fiatAmount =
+            _collateralTokenAmountInFiat(tokenAmount, tokenToFiatRate);
+        require(fiatAmount > 0, "FIAT_ZERO");
+
+        uint256 remainingFiat = fiatAmount;
+        uint256 interestPaid;
+        uint256 principalPaid;
+
+        // 1️⃣ Pay interest first
+        if (od.interestAccrued > 0 && remainingFiat > 0) {
+            uint256 interestToPay = remainingFiat > od.interestAccrued
+                ? od.interestAccrued
+                : remainingFiat;
+
+            interestPaid = interestToPay;
+            od.interestAccrued -= interestToPay;
+            remainingFiat -= interestToPay;
+        }
+
+        // 2️⃣ Pay principal (CAPPED — never revert)
+        if (od.utilizedLimit > 0 && remainingFiat > 0) {
+            uint256 principalToPay = remainingFiat > od.utilizedLimit
+                ? od.utilizedLimit
+                : remainingFiat;
+
+            principalPaid = principalToPay;
+            od.utilizedLimit -= principalToPay;
+            od.availableLimit += principalToPay;
+            remainingFiat -= principalToPay;
+        }
+
+        // 3️⃣ Close overdraft if fully settled
+        if (od.utilizedLimit == 0 && od.interestAccrued == 0) {
+            activeOverdraftByBorrower[od.borrower] = bytes32(0);
+            if (activeOverdraftCount > 0) {
+                activeOverdraftCount -= 1;
+            }
+        }
+
+        // 4️⃣ Refund excess tokens (if user overpaid)
+        if (remainingFiat > 0) {
+            
+            uint256 refundTokenAmount =
+                _collateralTokenAmountInFiat(
+                    remainingFiat,
+                    tokenToFiatRate
+                );
+
+            if (refundTokenAmount > 0) {
+                IERC20(token).safeTransfer(
+                    platformFeeAddress,
+                    refundTokenAmount
+                );
+            }
+        }
+
+        emit OverdraftRepaidByBorrower(
+            msg.sender,
+            creditRef,
+            tokenAmount,
+            fiatAmount,
+            interestPaid,
+            principalPaid
+        );
+    }
+
+
+
    
     // whitelist borrower
-    function whitelistUser(address borrower, bool allowed) external onlyManager {
+    function whitelistUser(address borrower, bool allowed) external onlyVaultAdminOrManager {
         userWhitelisted[borrower] = allowed;
         emit UserWhitelisted(borrower, allowed);
     }
 
-    function postDailyFee(bytes32 creditRef) external whenNotPaused nonReentrant onlyManager {
+    function isUserWhitelisted(address user) external view returns (bool) {
+        return userWhitelisted[user];
+    }
+
+    function postDailyFee(bytes32 creditRef) external whenNotPaused nonReentrant onlyVaultAdminOrManager {
         _postDailyFee(creditRef);
     }   
 
@@ -748,7 +850,7 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
     function _collateralTokenAmountInFiat(uint256 tokenAmount, uint256 _tokenToFiatRate)  internal view returns (uint256) {
         // GBP = (USDT * 1e18) / rate
         //(usdtAmount6 * rate) / DECIMALS_6
-         require(tokenDecimal > 0, "Token Decimal is zero"); // prevent divide by zero
+        require(tokenDecimal > 0, "Token Decimal is zero"); // prevent divide by zero
         return (tokenAmount * _tokenToFiatRate) / tokenDecimal;
     }
 
@@ -938,13 +1040,6 @@ contract OverdraftLineVaultV7 is Ownable, Pausable, ReentrancyGuard {
             totalUserBalances
         );
     }
-
-
-
-
-    
-
-
 
 
 }

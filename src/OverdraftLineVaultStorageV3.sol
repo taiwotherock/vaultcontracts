@@ -17,7 +17,6 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
-
     // --- Events ---
     event CollateralDeposited(address indexed user, address indexed token, uint256 amount);
     event CollateralWithdrawn(address indexed user, address indexed token, uint256 amount);
@@ -50,13 +49,22 @@ interface IERC20 {
     event StaffChangeApproved(address indexed staffAddress, bool enable, address indexed approvedBy, bytes32 changeId);
     event StaffDisabled(address indexed staffAddress);
     event OverdraftApproved(bytes32 indexed creditRef, address borrower);
-    event TokenToFiatRateUpdated(address indexed oldOracle, address indexed newOracle);
+    event TokenToFiatRateUpdated(uint256 indexed oldOracle, uint256 indexed newOracle);
     
   
   // max borrowers to process in one call to avoid gas limit issues
     
 
     event BorrowerDailyFeeProcessed(address borrower, bytes32 creditRef, bool success, string reason);
+
+    event OverdraftRepaidByBorrower(
+        address indexed borrower,
+        bytes32 indexed creditRef,
+        uint256 tokenAmount,
+        uint256 fiatAmountApplied,
+        uint256 interestPaid,
+        uint256 principalPaid
+    );
 
 
     struct Overdraft {
