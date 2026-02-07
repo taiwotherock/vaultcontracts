@@ -234,11 +234,9 @@ contract SmartWalletCoreUpg is Initializable, EIP712, ReentrancyGuard {
         bytes memory signature
     ) external whenNotPaused nonReentrant {
        
-        
         require(block.timestamp <= deadline, "EXPIRED");
         require(amount <= maxTxAmount, "TX_AMOUNT_EXCEEDS_LIMIT");
-       
-        
+             
         require(amount > 0, "zero amount");
         
         require(whitelisted[to], "address not whitelisted");
