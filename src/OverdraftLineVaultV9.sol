@@ -8,7 +8,7 @@ import "./ReentrancyGuard.sol";
 
 
 
-contract OverdraftLineVaultV8 is Ownable, Pausable, ReentrancyGuard {
+contract OverdraftLineVaultV9 is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     //IERC20 public immutable token;
     address token;
@@ -28,7 +28,6 @@ contract OverdraftLineVaultV8 is Ownable, Pausable, ReentrancyGuard {
     //mapping(address => bool) public userWhitelisted;
     mapping(address => bool) public userWhitelisted;
     
-
     // configuration
     uint256 public activeOverdraftCount;
     uint256 public maximumOverdraftLimit = 100 * 1e18; // fiat amount (e.g. cents);
@@ -514,7 +513,7 @@ contract OverdraftLineVaultV8 is Ownable, Pausable, ReentrancyGuard {
 
         // Pay principal
         if (remaining > 0) {
-            require(od.utilizedLimit >= remaining, "OVERPAY");
+            //require(od.utilizedLimit >= remaining, "OVERPAY");
             od.utilizedLimit -= remaining;
             od.availableLimit += remaining;
         }

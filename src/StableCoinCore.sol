@@ -3,7 +3,7 @@ pragma solidity ^0.8.23;
 
 import "./RolesModule.sol";
 
-contract StableCoinCoreV2 is RolesModule {
+contract StableCoinCore is RolesModule {
 
     struct MintProposal {
         address to;
