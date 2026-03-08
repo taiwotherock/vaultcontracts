@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
+contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
 
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
@@ -64,10 +64,8 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
     mapping(address => bool)    public whitelisted;
 
     // Session management — replaces global nonces
-    mapping(uint256 => mapping(address => uint256)) public sessionNonces;
-    mapping(uint256 => uint256) public sessionExpiry;
-    mapping(uint256 => bool)    public sessionClosed;
-    mapping(uint256 => address) public sessionCreator;
+    //mapping(uint256 => mapping(address => uint256)) public noncess;
+    mapping(bytes32 => bool)    public paymentIdUsed;
     uint256 public nextSessionId = 1;
 
     uint256 public dailyLimit;
@@ -75,6 +73,8 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
     mapping(ActionType => uint256) public actionTimelock;
     uint256 public actionCount;
     mapping(uint256 => ActionRequest) public actions;
+    mapping(address => uint256) public nonces;
+    mapping(address => mapping(address => uint256)) public balances;
 
     uint256 public maxTxAmount;
     bool    public paused;
@@ -82,12 +82,12 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
     // ─── EIP-712 ──────────────────────────────────────────────────────────────
     bytes32 public constant TRANSFER_TYPEHASH = keccak256(
         "Transfer(address token,address walletAddress,address to,uint256 amount,"
-        "uint256 nonce,uint256 deadline,uint256 sessionId,string paymentId)"
+        "uint256 nonce,uint256 deadline,string paymentId)"
     );
 
     // ─── Events ───────────────────────────────────────────────────────────────
-    event TransferExecuted(address indexed token, address indexed to, uint256 amount, uint256 sessionId, string paymentId);
-    event PaymentExecuted(address indexed token, address indexed to, address indexed signer, uint256 amount, uint256 sessionId, string paymentId);
+    event TransferExecuted(address indexed token, address indexed to, uint256 amount, uint256 nonce, string paymentId);
+    event PaymentExecuted(address indexed token, address indexed to, address indexed signer, uint256 amount, uint256 nonce, string paymentId);
     event OwnerChanged(address indexed oldOwner, address indexed newOwner);
     event UserAdded(address indexed user);
     event UserRemoved(address indexed user);
@@ -102,16 +102,13 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
     event SystemAdminTransferred(address indexed oldAdmin, address indexed newAdmin);
     event DailyLimitChanged(uint256 oldLimit, uint256 newLimit);
     event MaxTxAmountChanged(uint256 oldAmount, uint256 newAmount);
-    event SessionCreated(uint256 indexed sessionId, address indexed creator, uint256 expiry);
-    event SessionClosed(uint256 indexed sessionId, address indexed closedBy);
-
+    event EmergencyWithdraw(address indexed token, address indexed to, uint256 amount);
+  
     // ─── Errors ───────────────────────────────────────────────────────────────
     error ZeroAddress();
     error ZeroAmount();
     error Unauthorized();
     error OutOfRange();
-    error SessionExpired();
-    error SessionNotFound();
     error InvalidNonce();
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
@@ -155,7 +152,7 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         uint256 _dailyLimit,
         uint256 _maxTxAmount,
         address _guardian
-    ) EIP712("SmartWalletCoreV4", "1") {
+    ) EIP712("SmartWalletCoreV6", "1") {
         require(_owner     != address(0),          "ZERO_OWNER");
         require(_dailyLimit > 0,                   "ZERO_DAILY_LIMIT");
         require(_maxTxAmount > 0,                  "ZERO_MAX_TX");
@@ -216,6 +213,7 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
             }
             emit UserRemoved(user);
         } else if (guardians[user]) {
+            require(guardianList.length > 1, "MIN_GUARDIANS");
             guardians[user] = false;
             for (uint i = 0; i < guardianList.length; i++) {
                 if (guardianList[i] == user) {
@@ -289,7 +287,7 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         require(depositsByRef[refNo].sender == address(0), "REF_EXISTS");
 
         uint256 actualAmount;
-
+        
         if (token == address(0)) {
             require(msg.value > 0,           "ZERO_ETH");
             require(msg.value == amount,     "ETH_AMOUNT_MISMATCH");
@@ -327,32 +325,7 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         emit Deposited(msg.sender, address(0), msg.value, autoRef);
     }
 
-    // ─── Session Management ───────────────────────────────────────────────────
-    function createSession(uint256 durationSeconds) external onlyStaffOrOwner returns (uint256) {
-        require(
-            durationSeconds >= MIN_SESSION_DURATION &&
-            durationSeconds <= MAX_SESSION_DURATION,
-            "INVALID_DURATION"
-        );
-        uint256 sessionId        = nextSessionId++;
-        sessionExpiry[sessionId] = block.timestamp + durationSeconds;
-        sessionCreator[sessionId] = msg.sender;
-        emit SessionCreated(sessionId, msg.sender, sessionExpiry[sessionId]);
-        return sessionId;
-    }
-
-    function closeSession(uint256 sessionId) external {
-        require(
-            msg.sender == sessionCreator[sessionId] ||
-            msg.sender == owner ||
-            msg.sender == systemAdmin,
-            "NOT_AUTHORIZED"
-        );
-        require(!sessionClosed[sessionId], "ALREADY_CLOSED");
-        sessionClosed[sessionId] = true;
-        emit SessionClosed(sessionId, msg.sender);
-    }
-
+  
     // ─── Signature Validation ─────────────────────────────────────────────────
     function _validateSignature(
         address token,
@@ -361,26 +334,23 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         uint256 amount,
         uint256 nonce,
         uint256 deadline,
-        uint256 sessionId,
         string memory paymentId,
         bytes memory signature
     ) internal returns (address signer) {
 
         // Time
-        require(block.timestamp <= deadline,                "EXPIRED");
+        require(block.timestamp <= deadline, "EXPIRED");
 
-        // Session
-        require(sessionId > 0,                             "INVALID_SESSION");
-        require(sessionExpiry[sessionId] > 0,              "SESSION_NOT_FOUND");
-        require(!sessionClosed[sessionId],                 "SESSION_CLOSED");
-        require(block.timestamp <= sessionExpiry[sessionId],"SESSION_EXPIRED");
-
-        // Amount
-        require(amount > 0,                                "ZERO_AMOUNT");
-        require(amount <= maxTxAmount,                     "TX_AMOUNT_EXCEEDS_LIMIT");
-
+        // nonce
+        require(nonce >= 0,"INVALID_ZERO_NONCE");
+        require(nonce == nonces[walletAddress], "INVALID_NONCE");
+       
+        
+        require(paymentIdUsed[keccak256(bytes(paymentId))] == false, "PAYMENT_ID_USED");
+        require(amount > 0, "ZERO_AMOUNT");
+        require(amount <= maxTxAmount,"TX_AMOUNT_EXCEEDS_LIMIT");
         // Wallet
-        require(walletAddress != address(0),               "ZERO_WALLET");
+        require(walletAddress != address(0), "ZERO_WALLET");
 
         // EIP-712
         bytes32 paymentIdHash = keccak256(bytes(paymentId));
@@ -392,18 +362,15 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
             amount,
             nonce,
             deadline,
-            sessionId,
             paymentIdHash
         ));
 
+        
         bytes32 digest = _hashTypedDataV4(structHash);
         signer = ECDSA.recover(digest, signature);
-
         require(signer != address(0),    "ZERO_SIGNER");
         require(signer == walletAddress, "INVALID_SIGNER");
-
-        // Session-scoped nonce
-        require(nonce == sessionNonces[sessionId][signer]++, "INVALID_NONCE");
+       
     }
 
     // ─── Execute Payment (pull INTO contract) ────────────────────────────────
@@ -414,34 +381,41 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         uint256 amount,
         uint256 nonce,
         uint256 deadline,
-        uint256 sessionId,
         string memory paymentId,
         bytes memory signature
     ) external payable whenNotPaused nonReentrant {
 
         address signer = _validateSignature(
-            token, walletAddress, to, amount, nonce, deadline, sessionId, paymentId, signature
+            token, walletAddress, to, amount, nonce, deadline, paymentId, signature
         );
 
         require(to == address(this), "NOT_CONTRACT_ADDRESS");
         require(
             staffs[msg.sender]    ||
             msg.sender == owner   ||
-            msg.sender == systemAdmin ||
-            msg.sender == walletAddress,
-            "NOT_AUTHORIZED"
+            msg.sender == systemAdmin ,   "NOT_AUTHORIZED"
         );
 
         if (token == address(0)) {
             require(msg.value == amount, "ETH_AMOUNT_MISMATCH");
+            balances[msg.sender][token] += amount;
         } else {
+
+            uint256 allowance = IERC20(token).allowance(walletAddress, address(this));
+            require(allowance >= amount, "INSUFFICIENT_ALLOWANCE");
+            require(IERC20(token).balanceOf(walletAddress) >= amount,"INSUFFICIENT_BALANCE");
+
             uint256 before = IERC20(token).balanceOf(address(this));
             IERC20(token).safeTransferFrom(walletAddress, address(this), amount);
             uint256 actualReceived = IERC20(token).balanceOf(address(this)) - before;
             require(actualReceived > 0, "ZERO_RECEIVED");
+            balances[walletAddress][token] += actualReceived;
         }
 
-        emit PaymentExecuted(token, to, signer, amount, sessionId, paymentId);
+        paymentIdUsed[keccak256(bytes(paymentId))] = true;
+        nonces[walletAddress]++;
+
+        emit PaymentExecuted(token, to, signer, amount, nonce, paymentId);
     }
 
     // ─── Execute Transfer (push OUT of contract) ──────────────────────────────
@@ -452,17 +426,16 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         uint256 amount,
         uint256 nonce,
         uint256 deadline,
-        uint256 sessionId,
         string memory paymentId,
         bytes memory signature
     ) external whenNotPaused nonReentrant {
 
         _validateSignature(
-            token, walletAddress, to, amount, nonce, deadline, sessionId, paymentId, signature
+            token, walletAddress, to, amount, nonce, deadline, paymentId, signature
         );
 
-        require(whitelisted[to],                              "NOT_WHITELISTED");
-        require(staffs[msg.sender] || msg.sender == owner,    "NOT_AUTHORIZED");
+        require(whitelisted[to], "NOT_WHITELISTED");
+        require(staffs[msg.sender] || msg.sender == owner, "NOT_AUTHORIZED");
 
         // Daily limit
         uint256 dayNumber = block.timestamp / 1 days;
@@ -481,7 +454,10 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
             IERC20(token).safeTransfer(to, amount);
         }
 
-        emit TransferExecuted(token, to, amount, sessionId, paymentId);
+        paymentIdUsed[keccak256(bytes(paymentId))] = true;
+        nonces[walletAddress]++;
+
+        emit TransferExecuted(token, to, amount, nonce, paymentId);
     }
 
     // ─── Actions ──────────────────────────────────────────────────────────────
@@ -576,6 +552,29 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         emit ActionCancelled(actionId);
     }
 
+    function emergencyWithdraw(
+        address token,
+        address to,
+        uint256 amount
+    ) external nonReentrant {
+        require(msg.sender == owner || msg.sender == systemAdmin, "NOT_AUTHORIZED");
+        require(to != address(0), "ZERO_ADDRESS");
+        require(amount > 0, "ZERO_AMOUNT");
+
+        if (token == address(0)) {
+            // Withdraw ETH
+            require(address(this).balance >= amount, "INSUFFICIENT_ETH_BALANCE");
+            (bool success, ) = payable(to).call{value: amount}("");
+            require(success, "ETH_TRANSFER_FAILED");
+        } else {
+            // Withdraw ERC20
+            require(IERC20(token).balanceOf(address(this)) >= amount, "INSUFFICIENT_TOKEN_BALANCE");
+            IERC20(token).safeTransfer(to, amount);
+        }
+
+        emit EmergencyWithdraw(token, to, amount);
+    }
+
     // ─── View Functions ───────────────────────────────────────────────────────
     function getBalance() external view returns (uint256) {
         return address(this).balance;
@@ -585,31 +584,35 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
         return IERC20(token).balanceOf(address(this));
     }
 
-    function getLimitsAndSessionNonce(uint256 sessionId)
+    function getLimits()
         external
         view
         onlyStaffOrOwner
         returns (
             uint256 _dailyLimit,
-            uint256 _maxTxAmount,
-            uint256 _sessionNonce,
-            uint256 _sessionExpiry,
-            bool    _sessionClosed
+            uint256 _maxTxAmount
         )
     {
         return (
             dailyLimit,
-            maxTxAmount,
-            sessionNonces[sessionId][msg.sender],
-            sessionExpiry[sessionId],
-            sessionClosed[sessionId]
+            maxTxAmount
         );
     }
 
-    function getSessionNonce(uint256 sessionId, address user) external view returns (uint256) {
-        return sessionNonces[sessionId][user];
+    function getNextNonce(address addr)
+        external
+        view
+        onlyStaffOrOwner
+        returns (
+            uint256 _nonce
+        )
+    {
+        return (
+            nonces[addr]
+        );
     }
-
+    
+  
     function isGuardianAddress(address user) external view returns (bool) {
         return guardians[user];
     }
@@ -654,5 +657,9 @@ contract SmartWalletCoreV4 is EIP712, ReentrancyGuard {
 
     function getSenderRefs(address sender) external view onlyStaffOrOwner returns (bytes32[] memory) {
         return senderRefs[sender];
+    }
+
+    function getDepositBalance(address sender,address token) external view onlyStaffOrOwner returns (uint256 _bal) {
+        return balances[sender][token];
     }
 }
