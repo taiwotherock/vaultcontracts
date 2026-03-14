@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
+contract SmartWalletCoreV7 is EIP712, ReentrancyGuard {
 
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
@@ -41,12 +41,15 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         bool executed;
     }
 
-    struct DepositTransaction {
+    enum TransactionType {DEPOSIT, TRANSFER,PAYMENT};  
+
+    struct TransactionLog {
         address sender;
         address token;
         uint256 amount;
         uint256 createdAt;
         bytes32 refNo;
+        TransactionType tranType;
     }
 
     // ─── State ────────────────────────────────────────────────────────────────
@@ -58,7 +61,7 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
     mapping(address => bool)    public staffs;
     address[]                   public staffList;
 
-    mapping(bytes32 => DepositTransaction) private depositsByRef;
+    mapping(bytes32 => TransactionLog) private transactionsByRef;
     mapping(address => bytes32[])          private senderRefs;
 
     mapping(address => bool)    public whitelisted;
@@ -152,7 +155,7 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         uint256 _dailyLimit,
         uint256 _maxTxAmount,
         address _guardian
-    ) EIP712("SmartWalletCoreV6", "1") {
+    ) EIP712("SmartWalletCoreV7", "1") {
         require(_owner     != address(0),          "ZERO_OWNER");
         require(_dailyLimit > 0,                   "ZERO_DAILY_LIMIT");
         require(_maxTxAmount > 0,                  "ZERO_MAX_TX");
@@ -284,7 +287,7 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         bytes32 refNo,
         uint256 amount
     ) external payable whenNotPaused nonReentrant {
-        require(depositsByRef[refNo].sender == address(0), "REF_EXISTS");
+        require(transactionsByRef[refNo].sender == address(0), "REF_EXISTS");
 
         uint256 actualAmount;
         
@@ -300,12 +303,13 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
             actualAmount = IERC20(token).balanceOf(address(this)) - before;
         }
 
-        depositsByRef[refNo] = DepositTransaction({
+        transactionsByRef[refNo] = TransactionLog({
             sender:    msg.sender,
             token:     token,
             amount:    actualAmount,
             createdAt: block.timestamp,
-            refNo:     refNo
+            refNo:     refNo,
+            tranType:  TransactionType.DEPOSIT
         });
         senderRefs[msg.sender].push(refNo);
         emit Deposited(msg.sender, token, actualAmount, refNo);
@@ -314,12 +318,13 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
     receive() external payable {
         require(msg.value > 0, "ZERO_ETH");
         bytes32 autoRef = keccak256(abi.encodePacked(msg.sender, block.timestamp, msg.value));
-        depositsByRef[autoRef] = DepositTransaction({
+        transactionsByRef[autoRef] = TransactionLog({
             sender:    msg.sender,
             token:     address(0),
             amount:    msg.value,
             createdAt: block.timestamp,
-            refNo:     autoRef
+            refNo:     autoRef,
+            tranType: TransactionType.DEPOSIT
         });
         senderRefs[msg.sender].push(autoRef);
         emit Deposited(msg.sender, address(0), msg.value, autoRef);
@@ -336,7 +341,7 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         uint256 deadline,
         string memory paymentId,
         bytes memory signature
-    ) internal returns (address signer) {
+    ) internal view returns (address signer) {
 
         // Time
         require(block.timestamp <= deadline, "EXPIRED");
@@ -351,6 +356,9 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         require(amount <= maxTxAmount,"TX_AMOUNT_EXCEEDS_LIMIT");
         // Wallet
         require(walletAddress != address(0), "ZERO_WALLET");
+        
+        bytes32 refNo = keccak256(bytes(paymentId))
+        require(transactionsByRef[refNo].sender == address(0), "PAYMENT_ID_EXISTS");
 
         // EIP-712
         bytes32 paymentIdHash = keccak256(bytes(paymentId));
@@ -390,11 +398,11 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         );
 
         require(to == address(this), "NOT_CONTRACT_ADDRESS");
-        require(
+        /*require(
             staffs[msg.sender]    ||
             msg.sender == owner   ||
             msg.sender == systemAdmin ,   "NOT_AUTHORIZED"
-        );
+        );*/
 
         if (token == address(0)) {
             require(msg.value == amount, "ETH_AMOUNT_MISMATCH");
@@ -412,7 +420,18 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
             balances[walletAddress][token] += actualReceived;
         }
 
-        paymentIdUsed[keccak256(bytes(paymentId))] = true;
+       bytes32 refNo = keccak256(bytes(paymentId));
+       paymentIdUsed[refNo] = true;
+       transactionsByRef[refNo] = TransactionLog({
+            sender:    msg.sender,
+            token:     token,
+            amount:    actualAmount,
+            createdAt: block.timestamp,
+            refNo:     refNo,
+            tranType:  TransactionType.PAYMENT
+        });
+        senderRefs[msg.sender].push(refNo);
+       
         nonces[walletAddress]++;
 
         emit PaymentExecuted(token, to, signer, amount, nonce, paymentId);
@@ -454,7 +473,17 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
             IERC20(token).safeTransfer(to, amount);
         }
 
-        paymentIdUsed[keccak256(bytes(paymentId))] = true;
+       bytes32 refNo = keccak256(bytes(paymentId));
+       paymentIdUsed[refNo] = true;
+       transactionsByRef[refNo] = TransactionLog({
+            sender:    msg.sender,
+            token:     token,
+            amount:    actualAmount,
+            createdAt: block.timestamp,
+            refNo:     refNo,
+            tranType:  TransactionType.PAYMENT
+        });
+        senderRefs[msg.sender].push(refNo);
         nonces[walletAddress]++;
 
         emit TransferExecuted(token, to, amount, nonce, paymentId);
@@ -650,9 +679,9 @@ contract SmartWalletCoreV1 is EIP712, ReentrancyGuard {
         return staffList;
     }
 
-    function getDepositByRef(bytes32 refNo) external view returns (DepositTransaction memory) {
-        require(depositsByRef[refNo].sender != address(0), "NOT_FOUND");
-        return depositsByRef[refNo];
+    function getDepositByRef(bytes32 refNo) external view returns (TransactionLog memory) {
+        require(transactionsByRef[refNo].sender != address(0), "NOT_FOUND");
+        return transactionsByRef[refNo];
     }
 
     function getSenderRefs(address sender) external view onlyStaffOrOwner returns (bytes32[] memory) {

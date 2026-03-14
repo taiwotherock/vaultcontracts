@@ -302,4 +302,12 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
         uint bal = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(owner,bal);
     }
+
+    function getPoolFee(address pool)
+        public
+        view
+        returns (uint256)
+    {
+        return IFeePool(pool).fee();
+    }
 }
