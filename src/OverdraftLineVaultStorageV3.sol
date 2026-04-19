@@ -50,6 +50,21 @@ interface IERC20 {
     event StaffDisabled(address indexed staffAddress);
     event OverdraftApproved(bytes32 indexed creditRef, address borrower);
     event TokenToFiatRateUpdated(uint256 indexed oldOracle, uint256 indexed newOracle);
+
+    event OverdraftRepaidByBorrower(
+        address indexed borrower,
+        bytes32 indexed creditRef,
+        uint256 tokenAmount,      // gross tokens pulled from borrower
+        uint256 fiatAmount,       // fiat equivalent of tokenAmount at spot rate
+        uint256 interestPaid,     // fiat amount applied to interestAccrued
+        uint256 principalPaid,    // fiat amount applied to utilizedLimit
+        uint256 refundTokenAmount // tokens returned to borrower (overpayment); dust if zero
+    );
+
+    event MaxRateChangeBpsUpdated(
+        uint256 indexed oldMaxBps,  // previous cap for diff visibility in logs
+        uint256 indexed newMaxBps   // new cap now in effect
+    );
     
   
   // max borrowers to process in one call to avoid gas limit issues

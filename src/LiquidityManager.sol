@@ -59,13 +59,14 @@ contract LiquidityManager is EIP712,ReentrancyGuard {
         uint256 amountOut
     );
 
-    constructor(address _owner, address _swapRouter, address _quoter) EIP712("LiquidityManager", "1") {
+    constructor(address _owner, address _swapRouter, address _quoter) 
+    EIP712("LiquidityManager", "1") {
         owner = _owner;
         
         //quoter = IQuoterV2(_quoter);
 
         require(_swapRouter != address(0), "zero swapRouter");
-        require(_quoter     != address(0), "zero quoter");
+        //require(_quoter     != address(0), "zero quoter");
 
         swapRouter = ISwapRouter(_swapRouter);
 
@@ -90,6 +91,15 @@ contract LiquidityManager is EIP712,ReentrancyGuard {
     modifier onlyOwner() {
         require(msg.sender == owner, "NOT_OWNER");
         _;
+    }
+
+    function getPool(
+        address tokenA,
+        address tokenB,
+        uint24  fee
+    ) external view returns (address pool) {
+        pool = factory.getPool(tokenA, tokenB, fee);
+        require(pool != address(0), "pool not found");
     }
 
      function exactInputSingle(

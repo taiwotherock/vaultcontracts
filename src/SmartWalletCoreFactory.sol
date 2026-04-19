@@ -2,7 +2,7 @@
 pragma solidity ^0.8.23;
 
 import "@openzeppelin/contracts/proxy/Clones.sol";
-import "./SmartWalletCoreUpg.sol";
+import "./SmartCardWallet.sol";
 
 contract SmartWalletCoreFactory {
 
@@ -54,7 +54,7 @@ contract SmartWalletCoreFactory {
         wallet = implementation.cloneDeterministic(salt);
 
         // Initialize clone
-        SmartWalletCoreUpg(payable(wallet)).initialize(
+        SmartCardWallet(payable(wallet)).initialize(
             owner,
             dailyLimit,
             maxTxAmount,

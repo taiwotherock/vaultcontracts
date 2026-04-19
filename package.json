@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@layerzerolabs/oft-evm": "^4.0.1"
+  }
+}

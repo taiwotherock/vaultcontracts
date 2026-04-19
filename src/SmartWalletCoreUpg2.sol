@@ -66,6 +66,9 @@ contract SmartWalletCoreUpg2 is Initializable, EIP712, ReentrancyGuard {
     // Max per transaction
     uint256 public maxTxAmount;
 
+    //Credit Card Limit
+    
+
     // Paused state
     bool public paused;
 
@@ -88,7 +91,6 @@ contract SmartWalletCoreUpg2 is Initializable, EIP712, ReentrancyGuard {
     event ActionExecuted(uint256 indexed id, ActionType action);
     event ActionCancelled(uint256 indexed id);
     event Initialized(address owner, uint256 dailyLimit, uint256 maxTxAmount, address guardian);
-
     
     error InvalidZeroAmount();
 
@@ -121,9 +123,8 @@ contract SmartWalletCoreUpg2 is Initializable, EIP712, ReentrancyGuard {
         require(!paused, "PAUSED");
         _;
     }
-
     
-     constructor() EIP712("SmartWalletCore", "1") {}
+    constructor() EIP712("SmartWalletCore", "1") {}
 
     function initialize(
         address _owner,
