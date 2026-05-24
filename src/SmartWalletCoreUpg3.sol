@@ -18,6 +18,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
     uint256 public constant MAX_STAFF             = 20;
     uint256 public constant MIN_SESSION_DURATION  = 1  minutes;
     uint256 public constant MAX_SESSION_DURATION  = 30 days;
+    uint256 public constant EMERGENCY_TIMELOCK = 24 hours;
 
     // ─── Enums ────────────────────────────────────────────────────────────────
     enum ActionType {
@@ -101,7 +102,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
     event WhitelistUpdated(address indexed account, bool status);
     event Paused(address indexed by);
     event Unpaused(address indexed by);
-    event ActionProposed(uint256 indexed id, ActionType action, address indexed maker);
+    event ActionProposed(uint256 indexed id, ActionType action, address indexed maker,address addressValue,uint256 intValue,uint256 expiry);
     event ActionApproved(uint256 indexed id, address indexed guardian);
     event ActionExecuted(uint256 indexed id, ActionType action);
     event ActionCancelled(uint256 indexed id);
@@ -110,6 +111,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
     event DailyLimitChanged(uint256 oldLimit, uint256 newLimit);
     event MaxTxAmountChanged(uint256 oldAmount, uint256 newAmount);
     event EmergencyWithdraw(address indexed token, address indexed to, uint256 amount);
+    event TimelockChanged(ActionType actionType, uint256 delay);
   
     // ─── Errors ───────────────────────────────────────────────────────────────
     error ZeroAddress();
@@ -283,6 +285,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
     function setActionTimelock(ActionType actionType, uint256 delay) external onlyOwner {
         require(delay >= 1 hours, "TIMELOCK_TOO_SHORT");
         actionTimelock[actionType] = delay;
+        emit TimelockChanged(actionType, delay);
     }
 
     // ─── Deposit ──────────────────────────────────────────────────────────────
@@ -353,8 +356,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
         // nonce
         require(nonce > 0,"INVALID_ZERO_NONCE");
         require(nonce == nonces[walletAddress], "INVALID_NONCE");
-       
-        
+               
         require(paymentIdUsed[keccak256(bytes(paymentId))] == false, "PAYMENT_ID_USED");
         require(amount > 0, "ZERO_AMOUNT");
         require(amount <= maxTxAmount,"TX_AMOUNT_EXCEEDS_LIMIT");
@@ -526,7 +528,7 @@ contract SmartWalletCoreUpg3 is EIP712, ReentrancyGuard {
             expiry:       expiry,
             executed:     false
         });
-        emit ActionProposed(id, actionType, msg.sender);
+        emit ActionProposed(id, actionType, msg.sender,addressValue,intValue,expiry);
         return id;
     }
 

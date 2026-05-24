@@ -148,6 +148,7 @@ contract FiatStablecoinAMMV16 is Ownable, ReentrancyGuard, EIP712, FiatAMMRiskBa
     event MinTradeLCYUpdated(uint256 oldMin, uint256 newMin);
     event DailySwapLimitUpdated(uint256 newLimit);
     event RelayerWhitelisted(address indexed lp,bool allowed);
+    event RateAndSpreadChanged(uint256 midPrice, uint256 buyRate, uint256 sellRate,uint256 spread);
 
     // -------------------------------------------------------
     // CONSTRUCTOR
@@ -196,12 +197,17 @@ contract FiatStablecoinAMMV16 is Ownable, ReentrancyGuard, EIP712, FiatAMMRiskBa
     // -------------------------------------------------------
 
     modifier onlyOracleManager() {
-        if (msg.sender != oracleManager) revert NotWhitelisted();
+        require(msg.sender == oracleManager, "only oracle manager");
+        _;
+    }
+
+    modifier onlyOracleManagerOrOwner() {
+        require(msg.sender == oracleManager || msg.sender == owner(), "only oracle manager or owner");
         _;
     }
 
     modifier onlyWhitelistedUser() {
-        if (!lpWhitelisted[msg.sender]) revert NotWhitelisted();
+        require(lpWhitelisted[msg.sender], "not whitelisted");
         _;
     }
 
@@ -420,16 +426,31 @@ contract FiatStablecoinAMMV16 is Ownable, ReentrancyGuard, EIP712, FiatAMMRiskBa
         }
 
         uint256 newPrice = pendingPrice;
-        pendingPrice     = 0;
-
+        pendingPrice = 0;
         _checkPriceDeviation(newPrice);
-
         midPrice        = newPrice;
         buyRate         = midPrice + halfSpread;
         sellRate        = midPrice - halfSpread;
         lastPriceUpdate = block.timestamp;
-
         emit PriceApplied(midPrice, buyRate, sellRate);
+    }
+
+    function setRatesAndSpread(uint256 midRate, uint256 spread) external onlyOracleManagerOrOwner nonReentrant
+    {
+        require(midRate > 0, "rate must be greater than zero");
+        require(spread > 0, "spread must be greater than zero");
+         uint256 diff = midRate > midPrice
+            ? midRate - midPrice
+            : midPrice - midRate;
+
+        uint256 deviationBps = Math.mulDiv(diff, FEE_DENOM, midPrice);
+        require(deviationBps >= MAX_PRICE_DEVIATION_BPS, "Price deviation too large");
+        require(spread <= midRate, "spread must be less than rate");
+        midPrice        = midRate;
+        buyRate         = midPrice + spread;
+        sellRate        = midPrice - spread;
+        lastPriceUpdate = block.timestamp;
+        emit RateAndSpreadChanged(midPrice, buyRate, sellRate,spread);
     }
 
     function _checkPriceDeviation(uint256 newPrice) internal {
@@ -465,15 +486,6 @@ contract FiatStablecoinAMMV16 is Ownable, ReentrancyGuard, EIP712, FiatAMMRiskBa
         if (!swapsPaused) revert NotPaused();
         if (block.timestamp < pauseTimestamp + PAUSE_COOLDOWN) revert CooldownActive();
         if (block.timestamp > lastPriceUpdate + maxPriceAge)   revert PriceStale();
-
-        /*if (!_checkLiquidityRecovered(
-            poolDeposits[address(USD)],
-            poolDeposits[address(cLCY)],
-            minLiquidity[address(USD)],
-            minLiquidity[address(cLCY)],
-            address(USD),
-            address(cLCY)
-        )) revert LiquidityNotRecovered();*/
 
         swapsPaused = false;
         emit SwapsResumed(msg.sender);

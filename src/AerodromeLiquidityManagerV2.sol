@@ -73,7 +73,20 @@ interface IRouter {
     ) external view returns (uint[] memory);
 }
 
-contract AerodromeLiquidityManager is ReentrancyGuard {
+interface IPoolLauncherFactory {
+    function getPool(address tokenA, address tokenB, bool stable) external view returns (address);
+    function isPool(address pool) external view returns (bool);
+}
+
+interface IPool {
+    function getAmountOut(uint256 amountIn, address tokenIn) external view returns (uint256);
+    function getReserves() external view returns (uint256 reserve0, uint256 reserve1, uint256 blockTimestampLast);
+    function token0() external view returns (address);
+    function token1() external view returns (address);
+    function stable() external view returns (bool);
+}
+
+contract AerodromeLiquidityManagerV2 is ReentrancyGuard {
 
     using SafeERC20 for IERC20;
 
@@ -111,7 +124,8 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
     function buildRoute(
         address tokenIn,
         address tokenOut,
-        bool stable
+        bool stable,
+        address factory2
     ) internal view returns(IRouter.Route[] memory routes){
 
         routes = new IRouter.Route[](1);
@@ -120,7 +134,7 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
             from: tokenIn,
             to: tokenOut,
             stable: stable,
-            factory: address(factory)
+            factory: factory2 //address(factory)
         });
     }
 
@@ -132,11 +146,11 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
         address tokenIn,
         address tokenOut,
         bool stable,
-        uint256 amountIn
+        uint256 amountIn,
+        address factory2
     ) public view returns(uint256 amountOut){
 
-        IRouter.Route[] memory routes = buildRoute(tokenIn,tokenOut,stable);
-
+        IRouter.Route[] memory routes = buildRoute(tokenIn,tokenOut,stable,factory2);
         uint256[] memory amounts = router.getAmountsOut(amountIn,routes);
         amountOut = amounts[amounts.length - 1];
     }
@@ -149,10 +163,11 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
         address tokenIn,
         address tokenOut,
         bool stable,
-        uint amountIn
+        uint amountIn,
+        address factory2
     ) external onlyOwner nonReentrant returns(uint amountOut){
 
-        IRouter.Route[] memory routes = buildRoute(tokenIn,tokenOut,stable);
+        IRouter.Route[] memory routes = buildRoute(tokenIn,tokenOut,stable,factory2);
         uint[] memory amounts = router.getAmountsOut(amountIn,routes);
         uint expectedOut = amounts[amounts.length - 1];
 
@@ -172,6 +187,59 @@ contract AerodromeLiquidityManager is ReentrancyGuard {
         amountOut = result[result.length - 1];
 
         emit SwapExecuted(tokenIn,tokenOut,amountIn,amountOut);
+    }
+
+    function quotev2(
+        address tokenIn,
+        address tokenOut,
+        bool stable,
+        uint256 amountIn,
+        address factory2
+    ) public view returns (uint256 amountOut) {
+
+        IPoolLauncherFactory poolFactory = IPoolLauncherFactory(factory2);
+
+        // Step 1: resolve pool address directly from the launcher factory
+        address poolAddr = poolFactory.getPool(tokenIn, tokenOut, stable);
+        require(poolAddr != address(0), "Pool does not exist");
+
+        // Step 2: sanity check — pool has liquidity
+        IPool pool = IPool(poolAddr);
+        (uint256 r0, uint256 r1, ) = pool.getReserves();
+        require(r0 > 0 && r1 > 0, "Pool has no liquidity");
+
+        // Step 3: quote directly from pool
+        amountOut = pool.getAmountOut(amountIn, tokenIn);
+    }
+
+    /* ------------------------------------------------------------ */
+    /* DEBUG HELPER — call this first to diagnose                   */
+    /* ------------------------------------------------------------ */
+
+    function debugPool(
+        address tokenIn,
+        address tokenOut,
+        bool stable,
+        address factory2
+    ) public view returns (
+        address poolAddr,
+        uint256 reserve0,
+        uint256 reserve1,
+        bool poolIsStable,
+        address tok0,
+        address tok1
+    ) {
+        poolAddr = IPoolLauncherFactory(factory2).getPool(tokenIn, tokenOut, stable);
+        
+        if (poolAddr == address(0)) {
+            return (address(0), 0, 0, false, address(0), address(0));
+        }
+
+        IPool pool = IPool(poolAddr);
+        (reserve0, reserve1, ) = pool.getReserves();
+        poolIsStable = pool.stable();
+        tok0 = pool.token0();
+        tok1 = pool.token1();
     }
 
     /* ------------------------------------------------------------ */

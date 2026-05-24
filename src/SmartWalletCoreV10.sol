@@ -110,7 +110,7 @@ contract SmartWalletCoreV10 is EIP712, ReentrancyGuard {
     event MaxTxAmountChanged(uint256 oldAmount, uint256 newAmount);
     event EmergencyWithdraw(address indexed token, address indexed to, uint256 amount);
     event StaffLimitChanged(uint256 dailyLimit, uint256 _dailyLimit, uint256 staffTranLimit, uint256 _tranLimit);
-  
+    event TimelockChanged(ActionType actionType, uint256 delay);
     // ─── Errors ───────────────────────────────────────────────────────────────
     error ZeroAddress();
     error ZeroAmount();
@@ -291,6 +291,7 @@ contract SmartWalletCoreV10 is EIP712, ReentrancyGuard {
     function setActionTimelock(ActionType actionType, uint256 delay) external onlyOwner {
         require(delay >= 1 hours, "TIMELOCK_TOO_SHORT");
         actionTimelock[actionType] = delay;
+        emit TimelockChanged(actionType, delay);
     }
 
     // ─── Deposit ──────────────────────────────────────────────────────────────
